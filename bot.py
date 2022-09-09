@@ -1,4 +1,4 @@
-import argparse, os, discord, random, string, asyncio 
+import argparse, os, discord, random, string, asyncio
 from datetime import datetime
 from multiprocessing.connection import Connection
 import cv2
@@ -213,12 +213,13 @@ parser.add_argument(
 #    default=Config.PATH_TO_SD+"configs/stable-diffusion/v1-inference.yaml",
 #    help="path to config which constructs model",
 #)
-#parser.add_argument(
-    #"--ckpt",
-    #type=str,
-    #default=Config.PATH_TO_SD+"models/ldm/stable-diffusion-v1/model.ckpt",
-    #help="path to checkpoint of model",
-#)
+parser.add_argument(
+    "--ckpt",
+    type=str,
+    help="path to checkpoint of model",
+    choices=list(Config.MODEL_DICT.keys()),
+    default=list(Config.MODEL_DICT.keys())[0]
+)
 parser.add_argument(
     "--strength",
     type=float,
@@ -264,7 +265,7 @@ def img2img(opt, filename: str, seed: int, connection: Connection):
         seed_everything(seed)
 
         config = OmegaConf.load(Config.PATH_TO_SD+"configs/stable-diffusion/v1-inference.yaml")
-        model = load_model_from_config(config, Config.PATH_TO_SD+"models/ldm/stable-diffusion-v1/model.ckpt")
+        model = load_model_from_config(config, Config.MODEL_DICT[opt.ckpt])
 
         if opt.float16:
             model.to(torch.float16)
@@ -364,8 +365,10 @@ def txt2img(opt, filename: str, seed: int, connection: Connection):
 
     # load
     try:
+        seed_everything(seed)
+
         config = OmegaConf.load(Config.PATH_TO_SD+"configs/stable-diffusion/v1-inference.yaml")
-        model = load_model_from_config(config, Config.PATH_TO_SD+"models/ldm/stable-diffusion-v1/model.ckpt")
+        model = load_model_from_config(config, Config.MODEL_DICT[opt.ckpt])
 
         if opt.float16:
             model.to(torch.float16)
@@ -392,7 +395,7 @@ def txt2img(opt, filename: str, seed: int, connection: Connection):
         os.makedirs(sample_path, exist_ok=True)
         grid_count = len(os.listdir(outpath)) - 1
 
-        g_cuda = torch.Generator(device='cuda')
+        start_code = None
 
         precision_scope = autocast if opt.precision=="autocast" else nullcontext
         with torch.no_grad():
@@ -401,7 +404,6 @@ def txt2img(opt, filename: str, seed: int, connection: Connection):
                     tic = time.time()
                     all_samples = list()
                     index = 0
-                    seedi = 0
                     for n in trange(min(opt.n_iter,4), desc="Sampling"):
                         for prompts in tqdm(data, desc="data"):
                             uc = None
@@ -411,9 +413,6 @@ def txt2img(opt, filename: str, seed: int, connection: Connection):
                                 prompts = list(prompts)
                             c = model.get_learned_conditioning(prompts)
                             shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-                            g_cuda.manual_seed((429498037 + seed % 4294967295 + 429499307*seedi)%4294967295)
-                            seedi += 1
-                            start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device, generator = g_cuda)
                             samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
                                                             conditioning=c,
                                                             batch_size=opt.n_samples,
@@ -638,6 +637,8 @@ if __name__ == '__main__':
             '`--repeat` シームレスタイリングできるテクスチャを生成するよ\n'\
             '`--float16` モデルをfloat16に変換して少しだけVRAMを節約するよ\n'\
             '`--init-img` 参照用の画像URLをいれてね（png限定）\n'\
-            '`--strength` 画像から生成するときに元の画像から離れる度合いだよ（0~1、デフォルト:0.75）\n'
+            '`--strength` 画像から生成するときに元の画像から離れる度合いだよ（0~1、デフォルト:0.75）\n'\
+            '`--seed` シード値を指定するよ\n'\
+            f'`--ckpt` 指定したモデルを使うよ、{list(Config.MODEL_DICT.keys())}の中から選んでね（デフォルト:{list(Config.MODEL_DICT.keys())[0]}）'
         await interaction.response.send_message(content=content)
     client.run(Config.TOKEN)

@@ -5,3 +5,6 @@ class Config:
     INDIR = '' # input dir (saved from image link)
     GUILD_IDS = [] # guild ids
     LOG = '' # log file path
+    MODEL_DICT = {
+        'example' : 'models/example.ckpt',
+    }
