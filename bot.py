@@ -87,13 +87,13 @@ def load_replacement(x):
     except Exception:
         return x
 
-parser.add_argument(
-    "--prompt",
-    type=str,
-    nargs="?",
-    default="a painting of a virus monster playing guitar",
-    help="the prompt to render"
-)
+#parser.add_argument(
+#    "--prompt",
+#    type=str,
+#    nargs="?",
+#    default="a painting of a virus monster playing guitar",
+#    help="the prompt to render"
+#)
 #parser.add_argument(
 #    "--outdir",
 #    type=str,
@@ -105,6 +105,11 @@ parser.add_argument(
     "--skip_grid",
     action='store_true',
     help="do not save a grid, only individual samples. Helpful when evaluating lots of samples",
+)
+parser.add_argument(
+    "--naive-weight",
+    action='store_true',
+    help="do not normalize weight"
 )
 parser.add_argument(
     "--skip_save",
@@ -314,10 +319,21 @@ def img2img(opt, filename: str, seed: int, connection: Connection):
                             uc = None
                             if opt.scale != 1.0:
                                 uc = model.get_learned_conditioning(batch_size * [""])
+                            c = None
                             if isinstance(prompts, tuple):
                                 prompts = list(prompts)
-                            c = model.get_learned_conditioning(prompts)
-
+                            for i in range(len(prompts[0])):
+                                ps = []
+                                ws = []
+                                for pwpairs in prompts:
+                                    (p,w) = pwpairs[i]
+                                    ps += [p]
+                                    ws += [w]
+                                if c == None:
+                                    c = model.get_learned_conditioning(ps) * ws[0]
+                                else:
+                                    c += model.get_learned_conditioning(ps) * ws[0]
+ 
                             # encode (scaled latent)
                             z_enc = sampler.stochastic_encode(init_latent, torch.tensor([t_enc]*batch_size).to(device))
                             # decode it
@@ -348,6 +364,8 @@ def img2img(opt, filename: str, seed: int, connection: Connection):
         print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
             f" \nEnjoy.")
     except:
+        import traceback
+        traceback.print_exc()
         connection.send(-1)
     else:
         connection.send(index)
@@ -409,9 +427,20 @@ def txt2img(opt, filename: str, seed: int, connection: Connection):
                             uc = None
                             if opt.scale != 1.0:
                                 uc = model.get_learned_conditioning(batch_size * [""])
+                            c = None
                             if isinstance(prompts, tuple):
                                 prompts = list(prompts)
-                            c = model.get_learned_conditioning(prompts)
+                            for i in range(len(prompts[0])):
+                                ps = []
+                                ws = []
+                                for pwpairs in prompts:
+                                    (p,w) = pwpairs[i]
+                                    ps += [p]
+                                    ws += [w]
+                                if c == None:
+                                    c = model.get_learned_conditioning(ps) * ws[0]
+                                else:
+                                    c += model.get_learned_conditioning(ps) * ws[0]
                             shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                             samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
                                                             conditioning=c,
@@ -458,6 +487,8 @@ def txt2img(opt, filename: str, seed: int, connection: Connection):
         print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
             f" \nEnjoy.")
     except:
+        import traceback
+        traceback.print_exc()
         connection.send(-1)
     else:
         connection.send(index)
@@ -467,15 +498,29 @@ intents = discord.Intents.all()
 from discord import app_commands 
 from discord.ui import View, Button
 
+def prompt_weight_analyze(prompt):
+    pwpairs = []
+    while True:
+        j = prompt.find('::')
+        if j == -1:
+            pwpairs += [(prompt,1)]
+            break
+        else:
+            pwpairs += [(prompt[:j],float(prompt[j+2:].split()[0]))]
+            k = prompt[j:].find(' ')
+            if k == -1:
+                break
+            prompt = prompt[j+k+1:]
+    return pwpairs
 
 def prompt_analyze(promptArgs):
     i = promptArgs.find(' --')
     if i == -1:
-        return [promptArgs]
+        return (promptArgs, [])
     else:
         prompt = promptArgs[0:i]
         args = promptArgs[i+1:len(promptArgs)].split()
-        return [prompt] + args
+        return prompt, args
 
 def write_log(interaction: discord.Interaction, filename: str, prompt: str, code: str):
     log_file = open(Config.LOG, mode='a')
@@ -495,21 +540,36 @@ async def oekaki_body(interaction: discord.Interaction, prompt: str):
     user = interaction.user
 
     try:
-        promptArgs = prompt_analyze(prompt)
-        print(promptArgs)
+        promptT, promptArgs = prompt_analyze(prompt)
+        print([promptT] + promptArgs)
 
-        promptArgsDisp = promptArgs
+        promptArgsDisp = [promptT] + promptArgs
         for i in range(0,len(promptArgsDisp)):
             if promptArgsDisp[i] == '--init-img':
                 if i+1 < len(promptArgsDisp):
                     promptArgsDisp[i+1] = f'<{promptArgsDisp[i+1]}>'
         promptDisp = ' '.join(promptArgsDisp)
 
-        promptT = promptArgs.pop(0)
         args = promptArgs
         opt = parser.parse_args(args)
         print(f'H:{opt.H},W:{opt.W}')
-        opt.prompt = promptT
+        pws = prompt_weight_analyze(promptT)
+        if opt.naive_weight:
+            opt.prompt = pws
+        else:
+            a = 0
+            for pw in pws:
+                (p,w) = pw
+                a += w
+            if abs(a) < 0.00000001:
+                pws += [('',1)]
+                a += 1
+            npws = []
+            for pw in pws:
+                (p,w) = pw
+                npws += [(p, w/a)]
+            opt.prompt = npws
+        print(opt.prompt)
     except:
         await interaction.edit_original_response(content=f'エラー:promptを見直してね{user.mention}:**{promptDisp}**')
         queuecount += 1
